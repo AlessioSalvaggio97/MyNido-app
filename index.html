@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MyNido - Monitoraggio Calo Fisiologico</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0d9488', // teal-600
+                        secondary: '#0f766e', // teal-700
+                        bglight: '#f0fdfa', // teal-50
+                        danger: '#ef4444', // red-500
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.2s ease-out',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'scale(0.95)' },
+                            '100%': { opacity: '1', transform: 'scale(1)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f3f4f6; /* gray-100 */
+            -webkit-tap-highlight-color: transparent;
+        }
+        /* Mobile friendly hide scrollbars */
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+        
+        /* Remove arrows from number input */
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Custom hook per LocalStorage
+        function useLocalStorage(key, initialValue) {
+            const [storedValue, setStoredValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch (error) {
+                    console.error("Errore lettura localStorage", error);
+                    return initialValue;
+                }
+            });
+
+            useEffect(() => {
+                try {
+                    window.localStorage.setItem(key, JSON.stringify(storedValue));
+                } catch (error) {
+                    console.error("Errore salvataggio localStorage", error);
+                }
+            }, [key, storedValue]);
+
+            return [storedValue, setStoredValue];
+        }
+
+        // Componente Icona integrato con Lucide
+        const Icon = ({ name, size = 20, color = "currentColor", className = "" }) => {
+            const spanRef = useRef(null);
+            
+            useEffect(() => {
+                if (spanRef.current) {
+                    // Inject the i tag
+                    spanRef.current.innerHTML = `<i data-lucide="${name}"></i>`;
+                    // Let Lucide replace it with an SVG
+                    lucide.createIcons({
+                        root: spanRef.current,
+                        attrs: {
+                            width: size,
+                            height: size,
+                            stroke: color,
+                            class: className,
+                            "stroke-width": "2"
+                        }
+                    });
+                }
+            }, [name, size, color, className]);
+            
+            return <span ref={spanRef} className="inline-flex items-center justify-center"></span>;
+        };
+
+        const App = () => {
+            const [bambini, setBambini] = useLocalStorage('mynido_bambini', []);
+            const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+            const [updatingChild, setUpdatingChild] = useState(null);
+            
+            // Stato per form "Aggiungi Bambino"
+            const [newNome, setNewNome] = useState('');
+            const [newDataNascita, setNewDataNascita] = useState('');
+            const [newOraNascita, setNewOraNascita] = useState('');
+            const [newPesoNascita, setNewPesoNascita] = useState('');
+
+            // Stato per modale "Aggiorna Peso"
+            const [nuovoPeso, setNuovoPeso] = useState('');
+            const [updateResult, setUpdateResult] = useState(null);
+
+            const generateUUID = () => {
+                return Date.now().toString(36) + Math.random().toString(36).substring(2);
+            };
+
+            const formatDateTime = (date) => {
+                const pad = (n) => n.toString().padStart(2, '0');
+                return `${pad(date.getDate())}/${pad(date.getMonth()+1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+            };
+
+            const handleAddChild = (e) => {
+                e.preventDefault();
+                const pNascita = parseInt(newPesoNascita, 10);
+                
+                const ts = formatDateTime(new Date());
+                const newChild = {
+                    id: generateUUID(),
+                    nome: newNome,
+                    dataNascita: newDataNascita,
+                    oraNascita: newOraNascita,
+                    pesoNascita: pNascita,
+                    pesoAttuale: pNascita,
+                    ultimaRilevazione: ts,
+                    variazionePercentuale: 0,
+                    cronologia: [{ data: ts, peso: pNascita, percentuale: 0 }]
+                };
+
+                setBambini([newChild, ...bambini]);
+                closeAddModal();
+            };
+
+            const closeAddModal = () => {
+                setIsAddModalOpen(false);
+                setNewNome('');
+                setNewDataNascita('');
+                setNewOraNascita('');
+                setNewPesoNascita('');
+            };
+
+            const openUpdateModal = (child) => {
+                setUpdatingChild(child);
+                setNuovoPeso('');
+                setUpdateResult(null);
+            };
+
+            const calcolaCaloFisiologico = (pesoNascita, pesoOdierno) => {
+                return ((pesoNascita - pesoOdierno) * 100) / pesoNascita;
+            };
+
+            const handleCalculateUpdate = (e) => {
+                e.preventDefault();
+                const pOdierno = parseInt(nuovoPeso, 10);
+                if (isNaN(pOdierno) || pOdierno <= 0) return;
+
+                const perc = calcolaCaloFisiologico(updatingChild.pesoNascita, pOdierno);
+                const formattedPerc = Math.abs(perc).toFixed(2);
+                const diffGrams = pOdierno - updatingChild.pesoNascita;
+                const absGrams = Math.abs(diffGrams);
+                
+                let isWarning = false;
+                let msg = '';
+                
+                if (perc > 0) {
+                    msg = `Il peso del bambino è calato del ${formattedPerc}% (-${absGrams}g)`;
+                    if (perc > 10) {
+                        isWarning = true;
+                    }
+                } else if (perc < 0) {
+                    msg = `Il peso del bambino è aumentato del ${formattedPerc}% (+${absGrams}g)`;
+                } else {
+                    msg = `Il peso del bambino è invariato.`;
+                }
+
+                setUpdateResult({
+                    message: msg,
+                    isWarning,
+                    calculatedPerc: perc,
+                    pesoOdierno: pOdierno
+                });
+            };
+
+            const confirmUpdate = () => {
+                const timestamp = formatDateTime(new Date());
+                
+                const updatedBambini = bambini.map(b => {
+                    if (b.id === updatingChild.id) {
+                        const history = b.cronologia ? [...b.cronologia] : [{ data: b.ultimaRilevazione, peso: b.pesoAttuale, percentuale: b.variazionePercentuale }];
+                        history.unshift({ data: timestamp, peso: updateResult.pesoOdierno, percentuale: updateResult.calculatedPerc });
+                        
+                        return {
+                            ...b,
+                            pesoAttuale: updateResult.pesoOdierno,
+                            variazionePercentuale: updateResult.calculatedPerc,
+                            ultimaRilevazione: timestamp,
+                            cronologia: history
+                        };
+                    }
+                    return b;
+                });
+                
+                setBambini(updatedBambini);
+                setUpdatingChild(null);
+            };
+
+            const formatVariazione = (perc) => {
+                if (perc === 0) return '0.00%';
+                const sign = perc > 0 ? '-' : '+';
+                return `${sign}${Math.abs(perc).toFixed(2)}%`;
+            };
+
+            return (
+                <div className="min-h-screen pb-24 text-gray-800">
+                    {/* Header */}
+                    <header className="bg-primary text-white p-4 shadow-md sticky top-0 z-10 flex items-center justify-center">
+                        <Icon name="baby" size={24} className="mr-2" color="white" />
+                        <h1 className="text-xl font-bold tracking-wide">MyNido</h1>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="p-4 max-w-md mx-auto">
+                        {bambini.length === 0 ? (
+                            <div className="text-center mt-20 flex flex-col items-center">
+                                <div className="bg-white p-6 rounded-full shadow-sm mb-4">
+                                    <Icon name="inbox" size={48} className="text-gray-300" />
+                                </div>
+                                <p className="text-gray-500 font-medium text-lg">Nessun bambino al nido</p>
+                                <p className="text-sm text-gray-400 mt-1">Premi "+" in basso per aggiungerne uno.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {bambini.map(b => {
+                                    const isDanger = b.variazionePercentuale > 10;
+                                    const isIncrease = b.variazionePercentuale < 0;
+                                    
+                                    return (
+                                        <div key={b.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                                            <div className="p-4">
+                                                <div className="flex justify-between items-center mb-3">
+                                                    <h2 className="text-lg font-bold text-gray-800 flex items-center">
+                                                        <div className="bg-bglight text-primary p-2 rounded-full mr-3">
+                                                            <Icon name="baby" size={18} />
+                                                        </div>
+                                                        {b.nome}
+                                                    </h2>
+                                                </div>
+                                                
+                                                <div className="grid grid-cols-2 gap-y-3 gap-x-2 text-sm mb-4 bg-gray-50 p-3 rounded-xl border border-gray-100">
+                                                    <div className="flex items-center text-gray-600">
+                                                        <Icon name="calendar" size={14} className="mr-1.5 text-gray-400" />
+                                                        {b.dataNascita.split('-').reverse().join('/')}
+                                                    </div>
+                                                    <div className="flex items-center text-gray-600">
+                                                        <Icon name="clock" size={14} className="mr-1.5 text-gray-400" />
+                                                        {b.oraNascita}
+                                                    </div>
+                                                    <div className="flex items-center text-gray-600">
+                                                        <Icon name="scale" size={14} className="mr-1.5 text-gray-400" />
+                                                        Nascita: <strong className="ml-1 text-gray-800">{b.pesoNascita}g</strong>
+                                                    </div>
+                                                    <div className="flex items-center text-gray-600">
+                                                        <Icon name="weight" size={14} className="mr-1.5 text-primary" />
+                                                        Attuale: <strong className="ml-1 text-primary">{b.pesoAttuale}g</strong>
+                                                    </div>
+                                                </div>
+
+                                                <div className={`p-3 rounded-xl mb-4 flex items-center justify-between border ${isDanger ? 'bg-red-50 border-red-200' : isIncrease ? 'bg-green-50 border-green-100' : 'bg-white border-gray-200 shadow-sm'}`}>
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-0.5 font-medium uppercase tracking-wider">Variazione Peso</p>
+                                                        <p className={`text-xl font-bold flex items-baseline ${isDanger ? 'text-red-600' : b.variazionePercentuale > 0 ? 'text-blue-600' : b.variazionePercentuale < 0 ? 'text-green-600' : 'text-gray-700'}`}>
+                                                            {formatVariazione(b.variazionePercentuale)}
+                                                            <span className="text-sm ml-2 font-semibold opacity-80">
+                                                                ({b.pesoAttuale - b.pesoNascita > 0 ? '+' : b.pesoAttuale - b.pesoNascita < 0 ? '-' : ''}{Math.abs(b.pesoAttuale - b.pesoNascita)}g)
+                                                            </span>
+                                                        </p>
+                                                    </div>
+                                                    {isDanger && (
+                                                        <div className="text-red-500 flex items-center">
+                                                            <Icon name="alert-triangle" size={28} />
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <details className="mb-4 group bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
+                                                    <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden p-3 text-sm text-primary font-medium flex justify-between items-center outline-none select-none hover:bg-gray-100 transition-colors">
+                                                        <span className="flex items-center">
+                                                            <Icon name="history" size={16} className="mr-2" />
+                                                            Cronologia rilevamenti
+                                                        </span>
+                                                        <Icon name="chevron-down" size={16} className="text-gray-400 group-open:rotate-180 transition-transform" />
+                                                    </summary>
+                                                    <div className="p-3 pt-0 max-h-40 overflow-y-auto space-y-2 border-t border-gray-100 mt-2">
+                                                        {(b.cronologia || [{data: b.ultimaRilevazione, peso: b.pesoAttuale, percentuale: b.variazionePercentuale}]).map((ril, i) => (
+                                                            <div key={i} className="flex justify-between items-center bg-white p-2 rounded-lg text-xs shadow-sm border border-gray-100">
+                                                                <span className="text-gray-500 font-mono">{ril.data}</span>
+                                                                <span className="font-bold flex items-center">
+                                                                    {ril.peso}g
+                                                                    <span className={`ml-2 ${ril.percentuale > 0 ? 'text-blue-500' : ril.percentuale < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                                                                        ({formatVariazione(ril.percentuale)})
+                                                                    </span>
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </details>
+
+                                                <button 
+                                                    onClick={() => openUpdateModal(b)}
+                                                    className="w-full bg-primary hover:bg-secondary text-white py-3.5 rounded-xl font-medium transition-colors flex items-center justify-center shadow-sm"
+                                                >
+                                                    <Icon name="refresh-cw" size={18} className="mr-2" color="white" />
+                                                    Aggiorna Peso
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </main>
+
+                    {/* FAB Aggiungi Bambino */}
+                    <button 
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-white rounded-full shadow-lg flex items-center justify-center hover:bg-secondary transition-transform active:scale-95 z-20"
+                        aria-label="Aggiungi Bambino"
+                    >
+                        <Icon name="plus" size={28} color="white" />
+                    </button>
+
+                    {/* Modale Aggiungi Bambino */}
+                    {isAddModalOpen && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-fade-in">
+                                <div className="bg-primary p-4 text-white flex justify-between items-center">
+                                    <h3 className="font-bold text-lg flex items-center">
+                                        <Icon name="baby" size={20} className="mr-2" color="white" /> Nuovo Bambino
+                                    </h3>
+                                    <button onClick={closeAddModal} className="text-white/80 hover:text-white p-1">
+                                        <Icon name="x" size={24} color="currentColor" />
+                                    </button>
+                                </div>
+                                <form onSubmit={handleAddChild} className="p-5 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Nome o Pseudonimo</label>
+                                        <input required type="text" value={newNome} onChange={e => setNewNome(e.target.value)} className="w-full border border-gray-300 rounded-xl p-3 focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow bg-gray-50 focus:bg-white" placeholder="Es. Mario Rossi" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Data Nascita</label>
+                                            <input required type="date" value={newDataNascita} onChange={e => setNewDataNascita(e.target.value)} className="w-full border border-gray-300 rounded-xl p-3 focus:ring-2 focus:ring-primary outline-none bg-gray-50 focus:bg-white" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Ora Nascita</label>
+                                            <input required type="time" value={newOraNascita} onChange={e => setNewOraNascita(e.target.value)} className="w-full border border-gray-300 rounded-xl p-3 focus:ring-2 focus:ring-primary outline-none bg-gray-50 focus:bg-white" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Peso Nascita (grammi)</label>
+                                        <div className="relative">
+                                            <input required type="number" inputMode="numeric" pattern="[0-9]*" value={newPesoNascita} onChange={e => setNewPesoNascita(e.target.value)} className="w-full border border-gray-300 rounded-xl p-3 pr-10 focus:ring-2 focus:ring-primary outline-none bg-gray-50 focus:bg-white" placeholder="Es. 3200" />
+                                            <span className="absolute right-3 top-3.5 text-gray-400 font-medium">g</span>
+                                        </div>
+                                    </div>
+                                    <div className="pt-2">
+                                        <button type="submit" className="w-full bg-primary text-white font-bold py-3.5 rounded-xl shadow-md hover:bg-secondary transition-colors">
+                                            Salva
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modale Aggiorna Peso */}
+                    {updatingChild && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-fade-in">
+                                <div className="bg-primary p-4 text-white flex justify-between items-center">
+                                    <h3 className="font-bold text-lg flex items-center">
+                                        <Icon name="scale" size={20} className="mr-2" color="white" /> Aggiorna {updatingChild.nome}
+                                    </h3>
+                                    <button onClick={() => setUpdatingChild(null)} className="text-white/80 hover:text-white p-1">
+                                        <Icon name="x" size={24} color="currentColor" />
+                                    </button>
+                                </div>
+                                <div className="p-5">
+                                    {!updateResult ? (
+                                        <form onSubmit={handleCalculateUpdate} className="space-y-5">
+                                            <div className="bg-bglight text-secondary p-3 rounded-xl border border-primary/20 flex justify-between items-center">
+                                                <span className="text-sm">Peso Nascita:</span>
+                                                <span className="font-bold text-lg">{updatingChild.pesoNascita}g</span>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Nuovo peso odierno (grammi)</label>
+                                                <div className="relative">
+                                                    <input required type="number" inputMode="numeric" pattern="[0-9]*" autoFocus value={nuovoPeso} onChange={e => setNuovoPeso(e.target.value)} className="w-full border border-gray-300 rounded-xl p-4 text-lg focus:ring-2 focus:ring-primary outline-none bg-gray-50 focus:bg-white" placeholder="Es. 3150" />
+                                                    <span className="absolute right-4 top-4 text-gray-400 font-medium">g</span>
+                                                </div>
+                                            </div>
+                                            <button type="submit" className="w-full bg-primary text-white font-bold py-3.5 rounded-xl shadow-md hover:bg-secondary transition-colors">
+                                                Calcola Variazione
+                                            </button>
+                                        </form>
+                                    ) : (
+                                        <div className="space-y-5 text-center">
+                                            <div className={`p-5 rounded-2xl border ${updateResult.isWarning ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
+                                                {updateResult.isWarning ? (
+                                                    <Icon name="alert-circle" size={40} className="mx-auto mb-3 text-red-500" />
+                                                ) : (
+                                                    <Icon name="check-circle" size={40} className="mx-auto mb-3 text-blue-500" />
+                                                )}
+                                                <p className="font-medium text-lg leading-snug">{updateResult.message}</p>
+                                                {updateResult.isWarning && (
+                                                    <p className="text-sm mt-3 font-bold bg-white/50 py-1.5 px-3 rounded-lg inline-block text-red-700">
+                                                        ⚠️ Attenzione clinica richiesta
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3 pt-2">
+                                                <button onClick={() => setUpdateResult(null)} className="py-3 px-4 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors">
+                                                    Annulla
+                                                </button>
+                                                <button onClick={confirmUpdate} className={`py-3 px-4 rounded-xl text-white font-bold shadow-md transition-colors ${updateResult.isWarning ? 'bg-red-600 hover:bg-red-700' : 'bg-primary hover:bg-secondary'}`}>
+                                                    Ok, Aggiorna
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
